@@ -31,57 +31,63 @@ function mpdSocket(host,port) {
 mpdSocket.prototype = {
 	callbacks: [],
 	commands: [],
-	i: 0,
-	response: {},
 	isOpen: false,
 	socket: null,
 	version: "0",
 	host: null,
 	port: null,
+	data: "",
+  response: {},
+  responses: [],
 
-	handleData: function(data) {
-		var lines = data.split("\n");
+	handleData: function(datum) {
+		this.data += datum;
+		lines = this.data.split("\n");
+		// Put back whatever's after the final \n for next time
+		this.data = lines.pop(); 
+
+		var match;
 		for (var l in lines) {
-			if (lines[l].match(/^ACK/)) {
-				this.response._error = lines[l].substr(10);
-				this.response._OK = false;
-				this.callbacks.shift()(this.response)
+			var line = lines[l];
+
+			if (match = line.match(/^ACK\s+\[.*?\](?:\s+\{.*?\})?\s+(.*)/)) {
+				this.callbacks.shift()(match[1], null);
 				this.response = {};
-				return;
-			} else if (lines[l].match(/^OK MPD/)) {
-				if (this.version == "0") {
-					this.version = lines[l].split(' ')[2];
-					return;
+				this.responses = [];
+			}
+			else if (line.match(/^OK MPD/)) {
+				this.version = lines[l].split(' ')[2];
+			}
+			else if (line.match(/^OK/)) {
+				if (this.responses.length > 0) {
+					if (typeof(this.response) == 'string' || Object.keys(this.response).length > 0) {
+						this.responses.push(this.response);
+					}
+					this.callbacks.shift()(null, this.responses);
 				}
-			} else if (lines[l].match(/^OK$/)) {
-				this.response._OK = true;
-				this.i = 0;
-				this.callbacks.shift()(this.response);
+				else {
+					this.callbacks.shift()(null, this.response);
+				}
 				this.response = {};
-				return;
-			} else {
-				var attr = lines[l].substr(0,lines[l].indexOf(":"));
-				var value = lines[l].substr((lines[l].indexOf(":"))+1);
-				value = value.replace(/^\s+|\s+$/g, ''); // trim whitespace
-				if (this.response._ordered_list != true) {
-					if (typeof(this.response[attr]) != 'undefined') {
-						//make ordered list
-						var tempResponse = new Object;
-						tempResponse[++(this.i)] = this.response;
-						this.response = tempResponse;
-						this.response._ordered_list = true;
-						this.response[++(this.i)] = new Object;
-						this.response[this.i][attr] = value;
-					} else {
-						this.response[attr] = value;
-					}
-				} else {
-					if (typeof(this.response[(this.i)][attr]) != 'undefined' || attr == "playlist" || attr == "file" || attr == "directory") {
-						this.response[++(this.i)] = new Object;
-						this.response[this.i][attr] = value;
-					} else {
-						this.response[this.i][attr] = value;
-					}
+				this.responses = [];
+			}
+			else {
+				// Matches 'key: val' or 'val'
+				match = line.match(/^(?:(.*?):)?\s*(.*?)\s*$/)
+				var key = match[1];
+				var value = match[2];
+				
+				// New response if old response was a string or had this key defined already
+				if (typeof(this.response) == 'string' || typeof(this.response[key]) != 'undefined') {
+					this.responses.push(this.response);
+					this.response = {};
+				}
+				
+				if (typeof(key) == 'undefined') {
+					this.response = value;
+				}
+				else {
+					this.response[key] = value;
 				}
 			}
 		}
@@ -90,7 +96,7 @@ mpdSocket.prototype = {
 	on: function(event, fn) {
 		this.socket.on(event,fn);
 	},
-		
+
 	open: function(host,port) {
 		var self = this;
 		if (!(this.isOpen)) {
